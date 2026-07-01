@@ -55,13 +55,22 @@ def read_recent_days(service, n_days: int) -> list[list]:
     return [r for r in rows[1:] if len(r) >= 1 and r[0] >= cutoff]
 
 
+def _get_sheet_id(service, sheet_name: str) -> int:
+    meta = service.spreadsheets().get(spreadsheetId=SPREADSHEET_ID).execute()
+    for s in meta["sheets"]:
+        if s["properties"]["title"] == sheet_name:
+            return s["properties"]["sheetId"]
+    raise ValueError(f"Sheet '{sheet_name}' not found")
+
+
 def delete_row(service, row_index: int) -> None:
     """Delete the row at 1-based row_index using batchUpdate."""
+    sheet_id = _get_sheet_id(service, SHEET_NAME)
     body = {
         "requests": [{
             "deleteDimension": {
                 "range": {
-                    "sheetId": 0,
+                    "sheetId": sheet_id,
                     "dimension": "ROWS",
                     "startIndex": row_index - 1,  # 0-based inclusive
                     "endIndex": row_index,          # 0-based exclusive
