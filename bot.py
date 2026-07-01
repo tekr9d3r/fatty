@@ -269,7 +269,8 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
                 "awaiting_correction": False,
             }
     except Exception as e:
-        await thinking_msg.edit_text(f"Error estimating: {e}")
+        _log_exception("text_handler estimate", e)
+        await thinking_msg.edit_text(f"Error estimating: {type(e).__name__}: {e}")
         return
 
     user_store.pending[user_id] = entry
@@ -370,6 +371,10 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
     logger.error("Unhandled exception", exc_info=context.error)
+
+
+def _log_exception(label: str, e: Exception) -> None:
+    logger.error("%s: %s: %s", label, type(e).__name__, e, exc_info=True)
 
 
 def main() -> None:
