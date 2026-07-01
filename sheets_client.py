@@ -6,7 +6,7 @@ from google.oauth2.service_account import Credentials
 from googleapiclient.discovery import build
 
 SPREADSHEET_ID = "1OxZdnPLmU8V3tMs7pdCHgyu0ORD4mqp1XvQx_8suZRc"
-SHEET_NAME = "Sheet1"
+SHEET_NAME = "Untitled"
 SETTINGS_SHEET = "Settings"
 SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
 
