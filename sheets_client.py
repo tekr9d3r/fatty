@@ -1,11 +1,13 @@
 import re
 from datetime import datetime, timedelta
+from typing import Optional
 
 from google.oauth2.service_account import Credentials
 from googleapiclient.discovery import build
 
 SPREADSHEET_ID = "1OxZdnPLmU8V3tMs7pdCHgyu0ORD4mqp1XvQx_8suZRc"
 SHEET_NAME = "Sheet1"
+SETTINGS_SHEET = "Settings"
 SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
 
 
@@ -70,4 +72,60 @@ def delete_row(service, row_index: int) -> None:
     service.spreadsheets().batchUpdate(
         spreadsheetId=SPREADSHEET_ID,
         body=body,
+    ).execute()
+
+
+def _ensure_settings_sheet(service) -> None:
+    meta = service.spreadsheets().get(spreadsheetId=SPREADSHEET_ID).execute()
+    existing = [s["properties"]["title"] for s in meta["sheets"]]
+    if SETTINGS_SHEET not in existing:
+        service.spreadsheets().batchUpdate(
+            spreadsheetId=SPREADSHEET_ID,
+            body={"requests": [{"addSheet": {"properties": {"title": SETTINGS_SHEET}}}]},
+        ).execute()
+        service.spreadsheets().values().update(
+            spreadsheetId=SPREADSHEET_ID,
+            range=f"{SETTINGS_SHEET}!A1:B1",
+            valueInputOption="RAW",
+            body={"values": [["user_id", "goal"]]},
+        ).execute()
+
+
+def get_user_goal(service, user_id: int) -> Optional[int]:
+    _ensure_settings_sheet(service)
+    result = service.spreadsheets().values().get(
+        spreadsheetId=SPREADSHEET_ID,
+        range=f"{SETTINGS_SHEET}!A:B",
+    ).execute()
+    for row in result.get("values", [])[1:]:
+        if len(row) >= 2 and row[0] == str(user_id):
+            try:
+                return int(row[1])
+            except ValueError:
+                return None
+    return None
+
+
+def set_user_goal(service, user_id: int, goal: int) -> None:
+    _ensure_settings_sheet(service)
+    result = service.spreadsheets().values().get(
+        spreadsheetId=SPREADSHEET_ID,
+        range=f"{SETTINGS_SHEET}!A:B",
+    ).execute()
+    rows = result.get("values", [])
+    for i, row in enumerate(rows[1:], start=2):
+        if len(row) >= 1 and row[0] == str(user_id):
+            service.spreadsheets().values().update(
+                spreadsheetId=SPREADSHEET_ID,
+                range=f"{SETTINGS_SHEET}!A{i}:B{i}",
+                valueInputOption="RAW",
+                body={"values": [[str(user_id), goal]]},
+            ).execute()
+            return
+    service.spreadsheets().values().append(
+        spreadsheetId=SPREADSHEET_ID,
+        range=f"{SETTINGS_SHEET}!A:B",
+        valueInputOption="RAW",
+        insertDataOption="INSERT_ROWS",
+        body={"values": [[str(user_id), goal]]},
     ).execute()

@@ -77,7 +77,8 @@ async def goal_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         await update.message.reply_text("Usage: /goal 2200")
         return
     goal = int(args[0])
-    user_store.set_goal(update.effective_user.id, goal)
+    user_id = update.effective_user.id
+    await asyncio.to_thread(sheets_client.set_user_goal, _sheets_service, user_id, goal)
     await update.message.reply_text(f"Daily goal set to {goal} kcal.")
 
 
@@ -109,7 +110,7 @@ async def today_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             food_cal += cal
             lines.append(f"  🍽 {item}: {cal} kcal")
 
-    goal = user_store.get_goal(user_id)
+    goal = await asyncio.to_thread(sheets_client.get_user_goal, _sheets_service, user_id)
     budget = (goal or 0) + burned_cal
     remaining = budget - food_cal
 
