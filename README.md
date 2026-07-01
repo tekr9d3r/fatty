@@ -1,6 +1,6 @@
 # Fatty — Telegram Calorie Tracker
 
-A Telegram bot that tracks calories by letting you describe food in plain text or send a photo. It uses Claude for calorie estimation and logs every entry to a Google Sheet.
+A Telegram AI agent that tracks calories by letting you describe food in plain text or send a photo. It uses Claude for calorie estimation and logs every entry to a Google Sheet.
 
 ---
 
