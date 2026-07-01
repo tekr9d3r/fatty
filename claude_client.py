@@ -1,5 +1,6 @@
 import base64
 import json
+import os
 import re
 
 import anthropic
@@ -11,7 +12,8 @@ MODEL = "claude-sonnet-4-6"
 def get_client() -> anthropic.AsyncAnthropic:
     global _client
     if _client is None:
-        _client = anthropic.AsyncAnthropic()
+        api_key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
+        _client = anthropic.AsyncAnthropic(api_key=api_key)
     return _client
 
 
