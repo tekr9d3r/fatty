@@ -3,6 +3,9 @@ import logging
 import os
 from collections import defaultdict
 from datetime import datetime
+from zoneinfo import ZoneInfo
+
+TZ = ZoneInfo("Europe/Ljubljana")
 
 from dotenv import load_dotenv
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
@@ -96,7 +99,7 @@ async def goal_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
 async def today_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.effective_user.id
-    today = datetime.now().strftime("%Y-%m-%d")
+    today = datetime.now(tz=TZ).strftime("%Y-%m-%d")
     try:
         rows = await asyncio.to_thread(sheets_client.read_recent_days, _sheets_service, 1)
     except Exception as e:
@@ -348,7 +351,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             await query.edit_message_text("Session expired. Please resend your message.")
             return
 
-        now = datetime.now()
+        now = datetime.now(tz=TZ)
         row = [
             now.strftime("%Y-%m-%d"),
             now.strftime("%H:%M"),
