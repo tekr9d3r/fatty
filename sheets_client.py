@@ -115,6 +115,50 @@ def get_user_goal(service, user_id: int) -> Optional[int]:
     return None
 
 
+def set_chat_id(service, user_id: int, chat_id: int) -> None:
+    _ensure_settings_sheet(service)
+    result = service.spreadsheets().values().get(
+        spreadsheetId=SPREADSHEET_ID,
+        range=f"{SETTINGS_SHEET}!A:C",
+    ).execute()
+    rows = result.get("values", [])
+    for i, row in enumerate(rows[1:], start=2):
+        if len(row) >= 1 and row[0] == str(user_id):
+            service.spreadsheets().values().update(
+                spreadsheetId=SPREADSHEET_ID,
+                range=f"{SETTINGS_SHEET}!C{i}",
+                valueInputOption="RAW",
+                body={"values": [[str(chat_id)]]},
+            ).execute()
+            return
+    service.spreadsheets().values().append(
+        spreadsheetId=SPREADSHEET_ID,
+        range=f"{SETTINGS_SHEET}!A:C",
+        valueInputOption="RAW",
+        insertDataOption="INSERT_ROWS",
+        body={"values": [[str(user_id), "", str(chat_id)]]},
+    ).execute()
+
+
+def get_chat_ids(service) -> list:
+    """Return list of (user_id_str, chat_id_int) for all registered users."""
+    try:
+        result = service.spreadsheets().values().get(
+            spreadsheetId=SPREADSHEET_ID,
+            range=f"{SETTINGS_SHEET}!A:C",
+        ).execute()
+    except Exception:
+        return []
+    out = []
+    for row in result.get("values", [])[1:]:
+        if len(row) >= 3 and row[0] and row[2]:
+            try:
+                out.append((row[0], int(row[2])))
+            except ValueError:
+                pass
+    return out
+
+
 def set_user_goal(service, user_id: int, goal: int) -> None:
     _ensure_settings_sheet(service)
     result = service.spreadsheets().values().get(

@@ -1,8 +1,9 @@
 import asyncio
+import datetime
 import logging
 import os
 from collections import defaultdict
-from datetime import datetime
+from datetime import datetime as dt
 from zoneinfo import ZoneInfo
 
 TZ = ZoneInfo("Europe/Ljubljana")
@@ -71,7 +72,51 @@ def _confirmation_keyboard() -> InlineKeyboardMarkup:
     ]])
 
 
+async def morning_reminder_job(context: ContextTypes.DEFAULT_TYPE) -> None:
+    await context.bot.send_message(
+        chat_id=context.job.chat_id,
+        text="Good morning! 🌅 Don't forget to log your breakfast.",
+    )
+
+
+async def evening_recap_job(context: ContextTypes.DEFAULT_TYPE) -> None:
+    user_id = context.job.user_id
+    chat_id = context.job.chat_id
+    try:
+        text = await _build_today_summary(user_id)
+    except Exception as e:
+        text = f"Could not load daily recap: {e}"
+    await context.bot.send_message(chat_id=chat_id, text=f"Evening recap 🌙\n\n{text}")
+
+
+def _schedule_user_jobs(app, chat_id: int, user_id: int) -> None:
+    # Remove existing jobs for this user to avoid duplicates
+    for name in (f"morning_{user_id}", f"evening_{user_id}"):
+        existing = app.job_queue.get_jobs_by_name(name)
+        for job in existing:
+            job.schedule_removal()
+
+    app.job_queue.run_daily(
+        morning_reminder_job,
+        time=datetime.time(7, 0, tzinfo=TZ),
+        chat_id=chat_id,
+        user_id=user_id,
+        name=f"morning_{user_id}",
+    )
+    app.job_queue.run_daily(
+        evening_recap_job,
+        time=datetime.time(21, 0, tzinfo=TZ),
+        chat_id=chat_id,
+        user_id=user_id,
+        name=f"evening_{user_id}",
+    )
+
+
 async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    user_id = update.effective_user.id
+    chat_id = update.effective_chat.id
+    await asyncio.to_thread(sheets_client.set_chat_id, _sheets_service, user_id, chat_id)
+    _schedule_user_jobs(context.application, chat_id, user_id)
     await update.message.reply_text(
         "Welcome to Fatty — your personal calorie tracker!\n\n"
         "Just send me what you ate:\n"
@@ -97,15 +142,9 @@ async def goal_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     await update.message.reply_text(f"Daily goal set to {goal} kcal.")
 
 
-async def today_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    user_id = update.effective_user.id
-    today = datetime.now(tz=TZ).strftime("%Y-%m-%d")
-    try:
-        rows = await asyncio.to_thread(sheets_client.read_recent_days, _sheets_service, 1)
-    except Exception as e:
-        await update.message.reply_text(f"Error reading sheet: {e}")
-        return
-
+async def _build_today_summary(user_id: int) -> str:
+    today = dt.now(tz=TZ).strftime("%Y-%m-%d")
+    rows = await asyncio.to_thread(sheets_client.read_recent_days, _sheets_service, 1)
     today_rows = [r for r in rows if len(r) >= 5 and r[0] == today]
 
     food_cal = 0
@@ -147,7 +186,17 @@ async def today_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     else:
         parts.append("\nNo goal set — use /goal to set one.")
 
-    await update.message.reply_text("\n".join(parts))
+    return "\n".join(parts)
+
+
+async def today_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    user_id = update.effective_user.id
+    try:
+        text = await _build_today_summary(user_id)
+    except Exception as e:
+        await update.message.reply_text(f"Error reading sheet: {e}")
+        return
+    await update.message.reply_text(text)
 
 
 async def history_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -351,7 +400,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             await query.edit_message_text("Session expired. Please resend your message.")
             return
 
-        now = datetime.now(tz=TZ)
+        now = dt.now(tz=TZ)
         row = [
             now.strftime("%Y-%m-%d"),
             now.strftime("%H:%M"),
@@ -431,6 +480,11 @@ def main() -> None:
 
     app.add_handler(CallbackQueryHandler(callback_handler))
     app.add_error_handler(error_handler)
+
+    # Schedule daily jobs for all previously registered users
+    for uid_str, cid in sheets_client.get_chat_ids(_sheets_service):
+        _schedule_user_jobs(app, cid, int(uid_str))
+        logger.info("Scheduled daily jobs for user %s", uid_str)
 
     logger.info("Bot started. Polling...")
     app.run_polling(allowed_updates=Update.ALL_TYPES)
