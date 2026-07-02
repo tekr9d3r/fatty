@@ -48,6 +48,18 @@ def is_workout(text: str) -> bool:
     return any(kw in text_lower for kw in WORKOUT_KEYWORDS)
 
 
+def _progress_bar(current: int, total: int, width: int = 18) -> str:
+    if total <= 0:
+        return f"[{'░' * width}] —"
+    ratio = min(current / total, 1.0)
+    filled = round(ratio * width)
+    bar = "█" * filled + "░" * (width - filled)
+    pct = int(ratio * 100)
+    over = current > total
+    flag = " ⚠️" if over else ""
+    return f"[{bar}] {pct}%{flag}"
+
+
 def _confirmation_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([[
         InlineKeyboardButton("Yes, log it", callback_data="confirm_yes"),
@@ -114,22 +126,25 @@ async def today_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     budget = (goal or 0) + burned_cal
     remaining = budget - food_cal
 
-    header = f"Today ({today})\n"
+    parts = [f"Today ({today})"]
     if not today_rows:
-        header += "Nothing logged yet.\n"
+        parts.append("Nothing logged yet.")
     else:
-        header += "\n".join(lines) + "\n"
+        parts.append("\n".join(lines))
 
-    header += f"\nIntake:  {food_cal} kcal"
-    header += f"\nBurned:  {burned_cal} kcal"
+    parts.append("")
+    parts.append(f"Intake:  {food_cal} kcal")
+    parts.append(f"Burned:  {burned_cal} kcal")
+
     if goal:
-        header += f"\nGoal:    {goal} kcal"
-        header += f"\nBudget:  {budget} kcal"
-        header += f"\nLeft:    {remaining} kcal"
+        parts.append(f"Budget:  {budget} kcal  (goal {goal} + {burned_cal} burned)")
+        parts.append("")
+        parts.append(_progress_bar(food_cal, budget))
+        parts.append(f"{food_cal} / {budget} kcal — {remaining} remaining")
     else:
-        header += "\n\nNo goal set — use /goal to set one."
+        parts.append("\nNo goal set — use /goal to set one.")
 
-    await update.message.reply_text(header)
+    await update.message.reply_text("\n".join(parts))
 
 
 async def history_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -164,14 +179,16 @@ async def history_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         else:
             by_date[date]["food"] += cal
 
+    goal = await asyncio.to_thread(sheets_client.get_user_goal, _sheets_service, update.effective_user.id)
+
     lines = [f"Last {n_days} day(s) summary:"]
     for date in sorted(by_date.keys(), reverse=True):
         d = by_date[date]
+        budget = (goal or 0) + d["burned"]
         net = d["food"] - d["burned"]
-        lines.append(
-            f"\n{date}\n"
-            f"  Intake: {d['food']} kcal | Burned: {d['burned']} kcal | Net: {net} kcal"
-        )
+        bar = _progress_bar(d["food"], budget) if goal else ""
+        entry = f"\n{date}\n  {bar}\n  Intake: {d['food']} kcal | Burned: {d['burned']} kcal | Net: {net} kcal"
+        lines.append(entry)
 
     await update.message.reply_text("\n".join(lines))
 
