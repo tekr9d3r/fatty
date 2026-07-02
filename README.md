@@ -54,7 +54,7 @@ A Telegram AI agent that tracks calories by letting you describe food in plain t
 
 #### 3c. Share the Google Sheet with the service account
 
-1. Open your Google Sheet: [click here](https://docs.google.com/spreadsheets/d/1OxZdnPLmU8V3tMs7pdCHgyu0ORD4mqp1XvQx_8suZRc)
+1. Open your Google Sheet
 2. Click **Share**
 3. Enter the service account email (looks like `fatty-bot@your-project.iam.gserviceaccount.com` — found inside `service_account.json` under `"client_email"`)
 4. Set role to **Editor** and click **Send**

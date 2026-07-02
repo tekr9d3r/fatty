@@ -31,6 +31,23 @@ logger = logging.getLogger(__name__)
 
 USER_PROFILE = {"gender": "male", "height_cm": 192, "weight_kg": 108}
 
+# Comma-separated Telegram user IDs allowed to use this bot
+_ALLOWED_IDS: set[int] = set()
+
+
+def _load_allowed_ids() -> None:
+    raw = os.environ.get("ALLOWED_TELEGRAM_USER_IDS", "")
+    for part in raw.split(","):
+        part = part.strip()
+        if part.isdigit():
+            _ALLOWED_IDS.add(int(part))
+
+
+def _is_allowed(update: Update) -> bool:
+    if not _ALLOWED_IDS:
+        return True  # no whitelist configured — open access
+    return update.effective_user.id in _ALLOWED_IDS
+
 WORKOUT_KEYWORDS = {
     "swam", "swim", "swimming", "ran", "run", "running", "jog", "jogged", "jogging",
     "cycled", "cycling", "bike", "biked", "biking", "walked", "walking", "hike", "hiked",
@@ -113,6 +130,8 @@ def _schedule_user_jobs(app, chat_id: int, user_id: int) -> None:
 
 
 async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not _is_allowed(update):
+        return
     user_id = update.effective_user.id
     chat_id = update.effective_chat.id
     await asyncio.to_thread(sheets_client.set_chat_id, _sheets_service, user_id, chat_id)
@@ -132,6 +151,8 @@ async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
 
 async def goal_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not _is_allowed(update):
+        return
     args = context.args
     if not args or not args[0].isdigit():
         await update.message.reply_text("Usage: /goal 2200")
@@ -190,6 +211,8 @@ async def _build_today_summary(user_id: int) -> str:
 
 
 async def today_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not _is_allowed(update):
+        return
     user_id = update.effective_user.id
     try:
         text = await _build_today_summary(user_id)
@@ -200,6 +223,8 @@ async def today_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
 
 async def history_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not _is_allowed(update):
+        return
     args = context.args
     n_days = 7
     if args and args[0].isdigit():
@@ -246,6 +271,8 @@ async def history_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
 
 async def undo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not _is_allowed(update):
+        return
     user_id = update.effective_user.id
     last_row = user_store.get_last_row(user_id)
     if last_row is None:
@@ -261,6 +288,8 @@ async def undo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
 
 async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not _is_allowed(update):
+        return
     text = update.message.text
     user_id = update.effective_user.id
 
@@ -351,6 +380,8 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
 
 async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not _is_allowed(update):
+        return
     user_id = update.effective_user.id
     thinking_msg = await update.message.reply_text("Analyzing your photo...")
 
@@ -449,6 +480,7 @@ def _log_exception(label: str, e: Exception) -> None:
 
 def main() -> None:
     load_dotenv()
+    _load_allowed_ids()
 
     global _sheets_service
 
