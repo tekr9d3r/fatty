@@ -233,13 +233,17 @@ async def history_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         n_days = max(1, min(int(args[0]), 90))
 
     try:
-        rows = await asyncio.to_thread(sheets_client.read_recent_days, _sheets_service, n_days)
+        rows = await asyncio.to_thread(sheets_client.read_recent_days, _sheets_service, n_days + 1)
     except Exception as e:
         await update.message.reply_text(f"Error reading sheet: {e}")
         return
 
+    # Exclude today — only show completed days
+    today = dt.now(tz=TZ).strftime("%Y-%m-%d")
+    rows = [r for r in rows if len(r) >= 1 and r[0] != today]
+
     if not rows:
-        await update.message.reply_text(f"No entries in the last {n_days} day(s).")
+        await update.message.reply_text(f"No completed days in the last {n_days} day(s).")
         return
 
     # Group by date
