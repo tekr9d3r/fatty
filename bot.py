@@ -32,14 +32,19 @@ logger = logging.getLogger(__name__)
 
 
 async def _sheets(fn, *args, retries: int = 3, **kwargs):
-    """Run a sync sheets_client call in a thread, retrying on transient SSL errors."""
+    """Run a sync sheets_client call in a thread, rebuilding the service on SSL errors."""
+    global _sheets_service
+    call_args = list(args)
     for attempt in range(retries):
         try:
-            return await asyncio.to_thread(fn, *args, **kwargs)
+            return await asyncio.to_thread(fn, *call_args, **kwargs)
         except ssl.SSLError as e:
             if attempt < retries - 1:
                 wait = 2 ** attempt
-                logger.warning("SSL error on attempt %d, retrying in %ds: %s", attempt + 1, wait, e)
+                logger.warning("SSL error attempt %d/%d, rebuilding Sheets connection in %ds: %s",
+                               attempt + 1, retries, wait, e)
+                _sheets_service = sheets_client.build_service(_sa_json_path)
+                call_args[0] = _sheets_service  # first arg is always the service
                 await asyncio.sleep(wait)
             else:
                 raise
@@ -76,6 +81,7 @@ WORKOUT_KEYWORDS = {
 }
 
 _sheets_service = None
+_sa_json_path: str = ""
 
 
 def get_sheets_service():
@@ -606,6 +612,8 @@ def main() -> None:
     else:
         json_path = os.environ["GOOGLE_SERVICE_ACCOUNT_JSON"]
 
+    global _sa_json_path
+    _sa_json_path = json_path
     _sheets_service = sheets_client.build_service(json_path)
     logger.info("Google Sheets service initialized.")
 
