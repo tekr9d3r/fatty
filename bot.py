@@ -2,6 +2,7 @@ import asyncio
 import datetime
 import logging
 import os
+import ssl
 from collections import defaultdict
 from datetime import datetime as dt
 from zoneinfo import ZoneInfo
@@ -28,6 +29,23 @@ logging.basicConfig(
     level=logging.INFO,
 )
 logger = logging.getLogger(__name__)
+
+
+async def _sheets(fn, *args, retries: int = 3, **kwargs):
+    """Run a sync sheets_client call in a thread, retrying on transient SSL errors."""
+    for attempt in range(retries):
+        try:
+            return await asyncio.to_thread(fn, *args, **kwargs)
+        except ssl.SSLError as e:
+            if attempt < retries - 1:
+                wait = 2 ** attempt
+                logger.warning("SSL error on attempt %d, retrying in %ds: %s", attempt + 1, wait, e)
+                await asyncio.sleep(wait)
+            else:
+                raise
+        except Exception:
+            raise
+
 
 USER_PROFILE = {"gender": "male", "height_cm": 192, "weight_kg": 108}
 
@@ -136,7 +154,7 @@ async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         return
     user_id = update.effective_user.id
     chat_id = update.effective_chat.id
-    await asyncio.to_thread(sheets_client.set_chat_id, _sheets_service, user_id, chat_id)
+    await _sheets(sheets_client.set_chat_id, _sheets_service, user_id, chat_id)
     _schedule_user_jobs(context.application, chat_id, user_id)
     await update.message.reply_text(
         "Welcome to Fatty — your personal calorie tracker!\n\n"
@@ -162,7 +180,7 @@ async def goal_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         return
     goal = int(args[0])
     user_id = update.effective_user.id
-    await asyncio.to_thread(sheets_client.set_user_goal, _sheets_service, user_id, goal)
+    await _sheets(sheets_client.set_user_goal, _sheets_service, user_id, goal)
     await update.message.reply_text(f"Daily calorie goal set to {goal} kcal.")
 
 
@@ -175,13 +193,13 @@ async def protein_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         return
     goal = int(args[0])
     user_id = update.effective_user.id
-    await asyncio.to_thread(sheets_client.set_protein_goal, _sheets_service, user_id, goal)
+    await _sheets(sheets_client.set_protein_goal, _sheets_service, user_id, goal)
     await update.message.reply_text(f"Daily protein goal set to {goal}g.")
 
 
 async def _build_today_summary(user_id: int) -> str:
     today = dt.now(tz=TZ).strftime("%Y-%m-%d")
-    rows = await asyncio.to_thread(sheets_client.read_recent_days, _sheets_service, 1)
+    rows = await _sheets(sheets_client.read_recent_days, _sheets_service, 1)
     today_rows = [r for r in rows if len(r) >= 5 and r[0] == today]
 
     food_cal = 0
@@ -209,8 +227,8 @@ async def _build_today_summary(user_id: int) -> str:
             lines.append(f"  🍽 {item}: {cal} kcal{p_str}")
 
     goal, protein_goal = await asyncio.gather(
-        asyncio.to_thread(sheets_client.get_user_goal, _sheets_service, user_id),
-        asyncio.to_thread(sheets_client.get_protein_goal, _sheets_service, user_id),
+        _sheets(sheets_client.get_user_goal, _sheets_service, user_id),
+        _sheets(sheets_client.get_protein_goal, _sheets_service, user_id),
     )
     budget = (goal or 0) + burned_cal
 
@@ -265,7 +283,7 @@ async def history_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         n_days = max(1, min(int(args[0]), 90))
 
     try:
-        rows = await asyncio.to_thread(sheets_client.read_recent_days, _sheets_service, n_days + 1)
+        rows = await _sheets(sheets_client.read_recent_days, _sheets_service, n_days + 1)
     except Exception as e:
         await update.message.reply_text(f"Error reading sheet: {e}")
         return
@@ -301,8 +319,8 @@ async def history_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
     user_id = update.effective_user.id
     goal, protein_goal = await asyncio.gather(
-        asyncio.to_thread(sheets_client.get_user_goal, _sheets_service, user_id),
-        asyncio.to_thread(sheets_client.get_protein_goal, _sheets_service, user_id),
+        _sheets(sheets_client.get_user_goal, _sheets_service, user_id),
+        _sheets(sheets_client.get_protein_goal, _sheets_service, user_id),
     )
 
     # Totals across all days
@@ -359,7 +377,7 @@ async def undo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         await update.message.reply_text("Nothing to undo.")
         return
     try:
-        await asyncio.to_thread(sheets_client.delete_row, _sheets_service, last_row)
+        await _sheets(sheets_client.delete_row, _sheets_service, last_row)
     except Exception as e:
         await update.message.reply_text(f"Error deleting row: {e}")
         return
@@ -534,7 +552,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             entry.get("protein", 0),
         ]
         try:
-            row_idx = await asyncio.to_thread(sheets_client.append_row, _sheets_service, row)
+            row_idx = await _sheets(sheets_client.append_row, _sheets_service, row)
         except Exception as e:
             await query.edit_message_text(f"Error writing to sheet: {e}")
             return
