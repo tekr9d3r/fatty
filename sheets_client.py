@@ -18,20 +18,22 @@ def build_service(service_account_json_path: str):
 
 
 def append_row(service, row: list) -> int:
-    """Append one row to the sheet. Returns the 1-based row index of the new row."""
+    """Append one row to the sheet. Returns the 1-based row index of the new row.
+
+    Row format: [date, time, type, item, calories, notes, protein]
+    """
     result = (
         service.spreadsheets()
         .values()
         .append(
             spreadsheetId=SPREADSHEET_ID,
-            range="A:F",
+            range="A:G",
             valueInputOption="RAW",
             insertDataOption="INSERT_ROWS",
             body={"values": [row]},
         )
         .execute()
     )
-    # updatedRange looks like "Sheet1!A47:F47" — parse the row number
     updated_range = result["updates"]["updatedRange"]
     match = re.search(r"[A-Z]+(\d+):", updated_range)
     if match:
@@ -47,7 +49,7 @@ def read_recent_days(service, n_days: int) -> list[list]:
         .values()
         .get(
             spreadsheetId=SPREADSHEET_ID,
-            range="A:F",
+            range="A:G",
         )
         .execute()
     )
@@ -158,6 +160,46 @@ def get_chat_ids(service) -> list:
             except ValueError:
                 pass
     return out
+
+
+def get_protein_goal(service, user_id: int) -> Optional[int]:
+    _ensure_settings_sheet(service)
+    result = service.spreadsheets().values().get(
+        spreadsheetId=SPREADSHEET_ID,
+        range=f"{SETTINGS_SHEET}!A:D",
+    ).execute()
+    for row in result.get("values", [])[1:]:
+        if len(row) >= 4 and row[0] == str(user_id):
+            try:
+                return int(row[3])
+            except (ValueError, IndexError):
+                return None
+    return None
+
+
+def set_protein_goal(service, user_id: int, goal: int) -> None:
+    _ensure_settings_sheet(service)
+    result = service.spreadsheets().values().get(
+        spreadsheetId=SPREADSHEET_ID,
+        range=f"{SETTINGS_SHEET}!A:D",
+    ).execute()
+    rows = result.get("values", [])
+    for i, row in enumerate(rows[1:], start=2):
+        if len(row) >= 1 and row[0] == str(user_id):
+            service.spreadsheets().values().update(
+                spreadsheetId=SPREADSHEET_ID,
+                range=f"{SETTINGS_SHEET}!D{i}",
+                valueInputOption="RAW",
+                body={"values": [[goal]]},
+            ).execute()
+            return
+    service.spreadsheets().values().append(
+        spreadsheetId=SPREADSHEET_ID,
+        range=f"{SETTINGS_SHEET}!A:D",
+        valueInputOption="RAW",
+        insertDataOption="INSERT_ROWS",
+        body={"values": [[str(user_id), "", "", goal]]},
+    ).execute()
 
 
 def set_user_goal(service, user_id: int, goal: int) -> None:

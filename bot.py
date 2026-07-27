@@ -146,6 +146,7 @@ async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         "  • Workout: \"swam 47 min, 2050m, avg HR 133\"\n\n"
         "Commands:\n"
         "  /goal 2200 — set your daily calorie goal\n"
+        "  /protein 240 — set your daily protein goal\n"
         "  /today — today's intake, burned & remaining\n"
         "  /history 7 — last N days summary\n"
         "  /undo — remove your last logged entry"
@@ -162,7 +163,20 @@ async def goal_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     goal = int(args[0])
     user_id = update.effective_user.id
     await asyncio.to_thread(sheets_client.set_user_goal, _sheets_service, user_id, goal)
-    await update.message.reply_text(f"Daily goal set to {goal} kcal.")
+    await update.message.reply_text(f"Daily calorie goal set to {goal} kcal.")
+
+
+async def protein_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not _is_allowed(update):
+        return
+    args = context.args
+    if not args or not args[0].isdigit():
+        await update.message.reply_text("Usage: /protein 240")
+        return
+    goal = int(args[0])
+    user_id = update.effective_user.id
+    await asyncio.to_thread(sheets_client.set_protein_goal, _sheets_service, user_id, goal)
+    await update.message.reply_text(f"Daily protein goal set to {goal}g.")
 
 
 async def _build_today_summary(user_id: int) -> str:
@@ -172,6 +186,7 @@ async def _build_today_summary(user_id: int) -> str:
 
     food_cal = 0
     burned_cal = 0
+    protein_total = 0
     lines = []
     for r in today_rows:
         entry_type = r[2] if len(r) > 2 else "?"
@@ -180,16 +195,24 @@ async def _build_today_summary(user_id: int) -> str:
             cal = int(r[4])
         except (ValueError, IndexError):
             cal = 0
+        try:
+            protein = int(r[6]) if len(r) > 6 else 0
+        except (ValueError, IndexError):
+            protein = 0
         if entry_type == "Workout":
             burned_cal += abs(cal)
             lines.append(f"  🏃 {item}: {abs(cal)} kcal burned")
         else:
             food_cal += cal
-            lines.append(f"  🍽 {item}: {cal} kcal")
+            protein_total += protein
+            p_str = f" | {protein}g protein" if protein else ""
+            lines.append(f"  🍽 {item}: {cal} kcal{p_str}")
 
-    goal = await asyncio.to_thread(sheets_client.get_user_goal, _sheets_service, user_id)
+    goal, protein_goal = await asyncio.gather(
+        asyncio.to_thread(sheets_client.get_user_goal, _sheets_service, user_id),
+        asyncio.to_thread(sheets_client.get_protein_goal, _sheets_service, user_id),
+    )
     budget = (goal or 0) + burned_cal
-    remaining = budget - food_cal
 
     parts = [f"Today ({today})"]
     if not today_rows:
@@ -203,11 +226,20 @@ async def _build_today_summary(user_id: int) -> str:
         parts.append(f"Burned:  {burned_cal} kcal")
         parts.append(f"Budget:  {budget} kcal  (goal {goal} + {burned_cal} burned)")
         parts.append("")
+        parts.append("Calories:")
         parts.append(_progress_bar(food_cal, budget))
     else:
         parts.append(f"Intake:  {food_cal} kcal")
         parts.append(f"Burned:  {burned_cal} kcal")
-        parts.append("\nNo goal set — use /goal to set one.")
+        parts.append("No calorie goal set — use /goal to set one.")
+
+    if protein_goal:
+        parts.append("")
+        parts.append(f"Protein:")
+        parts.append(_progress_bar(protein_total, protein_goal))
+        parts.append(f"{protein_total}g / {protein_goal}g")
+    elif protein_total:
+        parts.append(f"\nProtein:  {protein_total}g  (no goal set — use /protein to set one)")
 
     return "\n".join(parts)
 
@@ -247,7 +279,7 @@ async def history_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         return
 
     # Group by date
-    by_date: dict[str, dict] = defaultdict(lambda: {"food": 0, "burned": 0})
+    by_date: dict[str, dict] = defaultdict(lambda: {"food": 0, "burned": 0, "protein": 0})
     for r in rows:
         if len(r) < 5:
             continue
@@ -257,16 +289,26 @@ async def history_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             cal = int(r[4])
         except (ValueError, IndexError):
             cal = 0
+        try:
+            protein = int(r[6]) if len(r) > 6 else 0
+        except (ValueError, IndexError):
+            protein = 0
         if entry_type == "Workout":
             by_date[date]["burned"] += abs(cal)
         else:
             by_date[date]["food"] += cal
+            by_date[date]["protein"] += protein
 
-    goal = await asyncio.to_thread(sheets_client.get_user_goal, _sheets_service, update.effective_user.id)
+    user_id = update.effective_user.id
+    goal, protein_goal = await asyncio.gather(
+        asyncio.to_thread(sheets_client.get_user_goal, _sheets_service, user_id),
+        asyncio.to_thread(sheets_client.get_protein_goal, _sheets_service, user_id),
+    )
 
     # Totals across all days
     total_food = sum(d["food"] for d in by_date.values())
     total_burned = sum(d["burned"] for d in by_date.values())
+    total_protein = sum(d["protein"] for d in by_date.values())
     total_budget = ((goal or 0) * len(by_date)) + total_burned
 
     lines = [f"📊 Last {n_days} days — Overview"]
@@ -280,6 +322,10 @@ async def history_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     else:
         lines.append(f"Total intake:  {total_food} kcal")
         lines.append(f"Total burned:  {total_burned} kcal")
+    if protein_goal:
+        lines.append(f"Total protein: {total_protein}g / {protein_goal * len(by_date)}g goal")
+    elif total_protein:
+        lines.append(f"Total protein: {total_protein}g")
     lines.append("─" * 28)
 
     for date in sorted(by_date.keys(), reverse=True):
@@ -296,6 +342,10 @@ async def history_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             lines.append(f"  Burned: {d['burned']} kcal")
         if goal:
             lines.append(f"  {_progress_bar(d['food'], budget)}")
+        if protein_goal:
+            lines.append(f"  Protein: {d['protein']}g / {protein_goal}g  {_progress_bar(d['protein'], protein_goal)}")
+        elif d["protein"]:
+            lines.append(f"  Protein: {d['protein']}g")
 
     await update.message.reply_text("\n".join(lines))
 
@@ -337,15 +387,19 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             await thinking_msg.edit_text(f"Error revising estimate: {e}")
             return
         items_str = "\n".join(
-            f"  • {i['name']}: {i['calories']} kcal" for i in result["items"]
+            f"  • {i['name']}: {i['calories']} kcal | {i.get('protein', 0)}g protein"
+            for i in result["items"]
         )
+        protein = result.get("total_protein", 0)
         existing.update({
             "item": ", ".join(i["name"] for i in result["items"])[:120],
-            "calories": result["total"],
+            "calories": result.get("total_calories", result.get("total", 0)),
+            "protein": protein,
             "notes": result["notes"],
             "display_text": (
                 f"{items_str}\n"
-                f"Total: {result['total']} kcal\n"
+                f"Total: {result.get('total_calories', result.get('total', 0))} kcal"
+                f"  |  {protein}g protein\n"
                 f"Notes: {result['notes']}"
             ),
             "claude_result": result,
@@ -381,16 +435,20 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         else:
             result = await claude_client.estimate_food(text)
             items_str = "\n".join(
-                f"  • {i['name']}: {i['calories']} kcal" for i in result["items"]
+                f"  • {i['name']}: {i['calories']} kcal | {i.get('protein', 0)}g protein"
+                for i in result["items"]
             )
+            protein = result.get("total_protein", 0)
             entry = {
                 "type": "Food",
                 "item": text[:120],
-                "calories": result["total"],
+                "calories": result.get("total_calories", result.get("total", 0)),
+                "protein": protein,
                 "notes": result["notes"],
                 "display_text": (
                     f"{items_str}\n"
-                    f"Total: {result['total']} kcal\n"
+                    f"Total: {result.get('total_calories', result.get('total', 0))} kcal"
+                    f"  |  {protein}g protein\n"
                     f"Notes: {result['notes']}"
                 ),
                 "original_description": text,
@@ -425,16 +483,20 @@ async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         return
 
     items_str = "\n".join(
-        f"  • {i['name']}: {i['calories']} kcal" for i in result["items"]
+        f"  • {i['name']}: {i['calories']} kcal | {i.get('protein', 0)}g protein"
+        for i in result["items"]
     )
+    protein = result.get("total_protein", 0)
     entry = {
         "type": "Food",
         "item": ", ".join(i["name"] for i in result["items"])[:120],
-        "calories": result["total"],
+        "calories": result.get("total_calories", result.get("total", 0)),
+        "protein": protein,
         "notes": result["notes"],
         "display_text": (
             f"{items_str}\n"
-            f"Total: {result['total']} kcal\n"
+            f"Total: {result.get('total_calories', result.get('total', 0))} kcal"
+            f"  |  {protein}g protein\n"
             f"Notes: {result['notes']}"
         ),
         "original_description": "food from photo",
@@ -469,6 +531,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             entry["item"],
             entry["calories"],
             entry["notes"],
+            entry.get("protein", 0),
         ]
         try:
             row_idx = await asyncio.to_thread(sheets_client.append_row, _sheets_service, row)
@@ -533,6 +596,7 @@ def main() -> None:
 
     app.add_handler(CommandHandler("start", start_handler))
     app.add_handler(CommandHandler("goal", goal_handler))
+    app.add_handler(CommandHandler("protein", protein_handler))
     app.add_handler(CommandHandler("today", today_handler))
     app.add_handler(CommandHandler("history", history_handler))
     app.add_handler(CommandHandler("undo", undo_handler))

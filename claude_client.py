@@ -8,6 +8,23 @@ import anthropic
 _client = None
 MODEL = "claude-sonnet-4-6"
 
+FOOD_JSON_FORMAT = """{
+  "items": [
+    {"name": "item name", "calories": 90, "protein": 5},
+    {"name": "coffee with milk", "calories": 55, "protein": 3}
+  ],
+  "total_calories": 145,
+  "total_protein": 8,
+  "notes": "Brief note about portion size assumptions"
+}"""
+
+FOOD_JSON_SYSTEM = (
+    "You are a nutrition estimation assistant. "
+    "Always respond with valid JSON: "
+    '{"items": [{"name": str, "calories": int, "protein": int}], '
+    '"total_calories": int, "total_protein": int, "notes": str}'
+)
+
 
 def get_client() -> anthropic.AsyncAnthropic:
     global _client
@@ -19,7 +36,6 @@ def get_client() -> anthropic.AsyncAnthropic:
 
 def extract_json(text: str) -> dict:
     text = text.strip()
-    # Strip markdown code fences if present
     if text.startswith("```"):
         text = re.sub(r"^```(?:json)?\s*", "", text)
         text = re.sub(r"\s*```$", "", text)
@@ -27,27 +43,19 @@ def extract_json(text: str) -> dict:
 
 
 async def estimate_food(description: str) -> dict:
-    """Estimate calories for a food/drink description.
+    """Estimate calories and protein for a food/drink description.
 
-    Returns: {"items": [{"name": str, "calories": int}], "total": int, "notes": str}
+    Returns: {"items": [...], "total_calories": int, "total_protein": int, "notes": str}
     """
     response = await get_client().messages.create(
         model=MODEL,
-        max_tokens=512,
+        max_tokens=600,
         messages=[{
             "role": "user",
             "content": (
-                f'You are a calorie estimation assistant. The user consumed: "{description}"\n\n'
-                "Estimate calories for each item and the total.\n\n"
-                "Respond ONLY with valid JSON in this exact format:\n"
-                "{\n"
-                '  "items": [\n'
-                '    {"name": "item name", "calories": 90},\n'
-                '    {"name": "coffee with milk", "calories": 55}\n'
-                "  ],\n"
-                '  "total": 145,\n'
-                '  "notes": "Brief note about portion size assumptions"\n'
-                "}\n\n"
+                f'You are a nutrition estimation assistant. The user consumed: "{description}"\n\n'
+                "Estimate calories AND protein (grams) for each item and the totals.\n\n"
+                f"Respond ONLY with valid JSON in this exact format:\n{FOOD_JSON_FORMAT}\n\n"
                 "Use typical portion sizes when not specified. Be concise."
             )
         }]
@@ -59,14 +67,14 @@ async def estimate_food(description: str) -> dict:
 
 
 async def estimate_food_from_photo(image_bytes: bytes, mime_type: str) -> dict:
-    """Estimate calories from a food photo.
+    """Estimate calories and protein from a food photo.
 
-    Returns: {"items": [{"name": str, "calories": int}], "total": int, "notes": str}
+    Returns: {"items": [...], "total_calories": int, "total_protein": int, "notes": str}
     """
     b64 = base64.standard_b64encode(image_bytes).decode("utf-8")
     response = await get_client().messages.create(
         model=MODEL,
-        max_tokens=512,
+        max_tokens=600,
         messages=[{
             "role": "user",
             "content": [
@@ -81,17 +89,10 @@ async def estimate_food_from_photo(image_bytes: bytes, mime_type: str) -> dict:
                 {
                     "type": "text",
                     "text": (
-                        "You are a calorie estimation assistant. Identify the food in this photo "
-                        "and estimate calories.\n\n"
-                        "Respond ONLY with valid JSON in this exact format:\n"
-                        "{\n"
-                        '  "items": [\n'
-                        '    {"name": "identified food", "calories": 300}\n'
-                        "  ],\n"
-                        '  "total": 300,\n'
-                        '  "notes": "What you see and any assumptions made"\n'
-                        "}\n\n"
-                        "If you cannot identify food, set total to 0 and explain in notes."
+                        "You are a nutrition estimation assistant. Identify the food in this photo "
+                        "and estimate calories AND protein (grams).\n\n"
+                        f"Respond ONLY with valid JSON in this exact format:\n{FOOD_JSON_FORMAT}\n\n"
+                        "If you cannot identify food, set totals to 0 and explain in notes."
                     ),
                 },
             ],
@@ -104,22 +105,15 @@ async def estimate_food_from_photo(image_bytes: bytes, mime_type: str) -> dict:
 
 
 async def correct_estimate(context_description: str, previous_result: dict, correction: str) -> dict:
-    """Re-estimate calories given a correction from the user.
-
-    Returns same shape as estimate_food().
-    """
+    """Re-estimate calories and protein given a correction from the user."""
     response = await get_client().messages.create(
         model=MODEL,
-        max_tokens=512,
-        system=(
-            "You are a calorie estimation assistant. "
-            "Always respond with valid JSON: "
-            '{"items": [{"name": str, "calories": int}], "total": int, "notes": str}'
-        ),
+        max_tokens=600,
+        system=FOOD_JSON_SYSTEM,
         messages=[
             {
                 "role": "user",
-                "content": f'Estimate calories for: "{context_description}"',
+                "content": f'Estimate nutrition for: "{context_description}"',
             },
             {
                 "role": "assistant",
