@@ -38,11 +38,11 @@ async def _sheets(fn, *args, retries: int = 3, **kwargs):
     for attempt in range(retries):
         try:
             return await asyncio.to_thread(fn, *call_args, **kwargs)
-        except ssl.SSLError as e:
+        except (ssl.SSLError, OSError) as e:
             if attempt < retries - 1:
                 wait = 2 ** attempt
-                logger.warning("SSL error attempt %d/%d, rebuilding Sheets connection in %ds: %s",
-                               attempt + 1, retries, wait, e)
+                logger.warning("Connection error attempt %d/%d, rebuilding Sheets connection in %ds: %s: %s",
+                               attempt + 1, retries, wait, type(e).__name__, e)
                 _sheets_service = sheets_client.build_service(_sa_json_path)
                 call_args[0] = _sheets_service  # first arg is always the service
                 await asyncio.sleep(wait)
@@ -232,10 +232,8 @@ async def _build_today_summary(user_id: int) -> str:
             p_str = f" | {protein}g protein" if protein else ""
             lines.append(f"  🍽 {item}: {cal} kcal{p_str}")
 
-    goal, protein_goal = await asyncio.gather(
-        _sheets(sheets_client.get_user_goal, _sheets_service, user_id),
-        _sheets(sheets_client.get_protein_goal, _sheets_service, user_id),
-    )
+    goal = await _sheets(sheets_client.get_user_goal, _sheets_service, user_id)
+    protein_goal = await _sheets(sheets_client.get_protein_goal, _sheets_service, user_id)
     budget = (goal or 0) + burned_cal
 
     parts = [f"Today ({today})"]
@@ -324,10 +322,8 @@ async def history_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             by_date[date]["protein"] += protein
 
     user_id = update.effective_user.id
-    goal, protein_goal = await asyncio.gather(
-        _sheets(sheets_client.get_user_goal, _sheets_service, user_id),
-        _sheets(sheets_client.get_protein_goal, _sheets_service, user_id),
-    )
+    goal = await _sheets(sheets_client.get_user_goal, _sheets_service, user_id)
+    protein_goal = await _sheets(sheets_client.get_protein_goal, _sheets_service, user_id)
 
     # Totals across all days
     total_food = sum(d["food"] for d in by_date.values())
