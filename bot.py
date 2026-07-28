@@ -325,27 +325,32 @@ async def history_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     goal = await _sheets(sheets_client.get_user_goal, _sheets_service, user_id)
     protein_goal = await _sheets(sheets_client.get_protein_goal, _sheets_service, user_id)
 
-    # Totals across all days
+    n = len(by_date)
     total_food = sum(d["food"] for d in by_date.values())
     total_burned = sum(d["burned"] for d in by_date.values())
     total_protein = sum(d["protein"] for d in by_date.values())
-    total_budget = ((goal or 0) * len(by_date)) + total_burned
 
-    lines = [f"📊 Last {n_days} days — Overview"]
+    avg_intake = total_food // n
+    avg_burned = total_burned // n
+    avg_protein = total_protein // n
+
+    lines = [f"📊 Last {n_days} days — Averages per day"]
     lines.append("─" * 28)
     if goal:
-        lines.append(f"Total budget:  {total_budget} kcal")
-        lines.append(f"Total intake:  {total_food} kcal")
-        lines.append(f"Total burned:  {total_burned} kcal")
-        lines.append("")
-        lines.append(_progress_bar(total_food, total_budget))
+        avg_budget = goal + avg_burned
+        avg_diff = avg_intake - avg_budget
+        if avg_diff > 0:
+            lines.append(f"Calories:  +{avg_diff} kcal over  (avg intake {avg_intake}, budget {avg_budget})")
+        else:
+            lines.append(f"Calories:  {avg_diff} kcal deficit  (avg intake {avg_intake}, budget {avg_budget})")
     else:
-        lines.append(f"Total intake:  {total_food} kcal")
-        lines.append(f"Total burned:  {total_burned} kcal")
-    if protein_goal:
-        lines.append(f"Total protein: {total_protein}g / {protein_goal * len(by_date)}g goal")
-    elif total_protein:
-        lines.append(f"Total protein: {total_protein}g")
+        lines.append(f"Avg intake:   {avg_intake} kcal/day")
+    lines.append(f"Avg burned:   {avg_burned} kcal/day  (total {total_burned} kcal)")
+    if avg_protein:
+        if protein_goal:
+            lines.append(f"Avg protein:  {avg_protein}g/day  (goal {protein_goal}g)")
+        else:
+            lines.append(f"Avg protein:  {avg_protein}g/day")
     lines.append("─" * 28)
 
     for date in sorted(by_date.keys(), reverse=True):
@@ -355,13 +360,9 @@ async def history_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         flag = " 🔴" if over else " ✅"
         lines.append(f"\n{date}{flag if goal else ''}")
         if goal:
-            lines.append(f"  Budget: {budget} kcal  |  Intake: {d['food']} kcal")
-        else:
-            lines.append(f"  Intake: {d['food']} kcal  |  Burned: {d['burned']} kcal")
+            lines.append(f"  {_progress_bar(d['food'], budget)}")
         if d["burned"]:
             lines.append(f"  Burned: {d['burned']} kcal")
-        if goal:
-            lines.append(f"  {_progress_bar(d['food'], budget)}")
         if protein_goal:
             lines.append(f"  Protein: {d['protein']}g / {protein_goal}g  {_progress_bar(d['protein'], protein_goal)}")
         elif d["protein"]:
