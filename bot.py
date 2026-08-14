@@ -93,7 +93,7 @@ def is_workout(text: str) -> bool:
     return any(kw in text_lower for kw in WORKOUT_KEYWORDS)
 
 
-def _progress_bar(current: int, total: int, width: int = 18) -> str:
+def _progress_bar(current: int, total: int, width: int = 18, unit: str = "kcal") -> str:
     if total <= 0:
         return f"[{'░' * width}] —"
     pct = int(current / total * 100)
@@ -101,10 +101,10 @@ def _progress_bar(current: int, total: int, width: int = 18) -> str:
     bar = "█" * filled + "░" * (width - filled)
     if current > total:
         over = current - total
-        return f"[{bar}] {pct}% ⚠️  +{over} kcal over!"
+        return f"[{bar}] {pct}% ⚠️  +{over} {unit} over!"
     else:
         remaining = total - current
-        return f"[{bar}] {pct}%  —  {remaining} kcal left"
+        return f"[{bar}] {pct}%  —  {remaining} {unit} left"
 
 
 def _confirmation_keyboard() -> InlineKeyboardMarkup:
@@ -258,7 +258,7 @@ async def _build_today_summary(user_id: int) -> str:
     if protein_goal:
         parts.append("")
         parts.append(f"Protein:")
-        parts.append(_progress_bar(protein_total, protein_goal))
+        parts.append(_progress_bar(protein_total, protein_goal, unit="g"))
         parts.append(f"{protein_total}g / {protein_goal}g")
     elif protein_total:
         parts.append(f"\nProtein:  {protein_total}g  (no goal set — use /protein to set one)")
@@ -364,7 +364,7 @@ async def history_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         if d["burned"]:
             lines.append(f"  Burned: {d['burned']} kcal")
         if protein_goal:
-            lines.append(f"  Protein: {d['protein']}g / {protein_goal}g  {_progress_bar(d['protein'], protein_goal)}")
+            lines.append(f"  Protein: {d['protein']}g / {protein_goal}g  {_progress_bar(d['protein'], protein_goal, unit='g')}")
         elif d["protein"]:
             lines.append(f"  Protein: {d['protein']}g")
 
