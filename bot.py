@@ -353,20 +353,24 @@ async def history_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             lines.append(f"Avg protein:  {avg_protein}g/day")
     lines.append("─" * 28)
 
-    for date in sorted(by_date.keys(), reverse=True):
-        d = by_date[date]
-        budget = (goal or 0) + d["burned"]
-        over = d["food"] > budget
-        flag = " 🔴" if over else " ✅"
-        lines.append(f"\n{date}{flag if goal else ''}")
-        if goal:
-            lines.append(f"  {_progress_bar(d['food'], budget)}")
-        if d["burned"]:
-            lines.append(f"  Burned: {d['burned']} kcal")
-        if protein_goal:
-            lines.append(f"  Protein: {d['protein']}g / {protein_goal}g  {_progress_bar(d['protein'], protein_goal, unit='g')}")
-        elif d["protein"]:
-            lines.append(f"  Protein: {d['protein']}g")
+    # Skip per-day bars for long periods — they'd exceed Telegram's 4096-char limit
+    if n <= 14:
+        for date in sorted(by_date.keys(), reverse=True):
+            d = by_date[date]
+            budget = (goal or 0) + d["burned"]
+            over = d["food"] > budget
+            flag = " 🔴" if over else " ✅"
+            lines.append(f"\n{date}{flag if goal else ''}")
+            if goal:
+                lines.append(f"  {_progress_bar(d['food'], budget)}")
+            if d["burned"]:
+                lines.append(f"  Burned: {d['burned']} kcal")
+            if protein_goal:
+                lines.append(f"  Protein: {d['protein']}g / {protein_goal}g  {_progress_bar(d['protein'], protein_goal, unit='g')}")
+            elif d["protein"]:
+                lines.append(f"  Protein: {d['protein']}g")
+    else:
+        lines.append(f"(daily breakdown available with /history 14 or less)")
 
     await update.message.reply_text("\n".join(lines))
 
