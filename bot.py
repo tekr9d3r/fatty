@@ -115,10 +115,35 @@ def _confirmation_keyboard() -> InlineKeyboardMarkup:
     ]])
 
 
+# Frequently eaten items — logged instantly, no Claude call.
+# (key, button label, name written to sheet, calories, protein g)
+QUICK_ITEMS = [
+    ("banana",    "🍌 Banana 90",       "Banana",                               90,  1),
+    ("pear",      "🍐 Pear 85",         "Pear",                                 85,  1),
+    ("apple",     "🍎 Apple 80",        "Apple",                                80,  1),
+    ("nectarine", "🍑 Nectarine 60",    "Nectarine",                            60,  2),
+    ("orange",    "🍊 Orange 70",       "Orange",                               70,  1),
+    ("pbj",       "🥪 PB&J bread 290",  "White bread + peanut butter + jelly", 290,  8),
+    ("pizza",     "🍕 Pizza slice 230", "Pizza slice ham & cheese (1/8)",      230, 12),
+    ("cookie",    "🍪 Cookie 70",       "Small cookie",                         70,  1),
+]
+
+
+def _quick_keyboard() -> InlineKeyboardMarkup:
+    rows = []
+    for i in range(0, len(QUICK_ITEMS), 2):
+        rows.append([
+            InlineKeyboardButton(item[1], callback_data=f"quick_{item[0]}")
+            for item in QUICK_ITEMS[i:i + 2]
+        ])
+    return InlineKeyboardMarkup(rows)
+
+
 async def morning_reminder_job(context: ContextTypes.DEFAULT_TYPE) -> None:
     await context.bot.send_message(
         chat_id=context.job.chat_id,
-        text="Good morning! 🌅 Don't forget to log your breakfast.",
+        text="Good morning! 🌅 Don't forget to log your breakfast.\n\nQuick add:",
+        reply_markup=_quick_keyboard(),
     )
 
 
@@ -169,6 +194,7 @@ async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         "  • Photo: send a picture of your meal\n"
         "  • Workout: \"swam 47 min, 2050m, avg HR 133\"\n\n"
         "Commands:\n"
+        "  /quick — one-tap buttons for your usual foods\n"
         "  /goal 2200 — set your daily calorie goal\n"
         "  /protein 240 — set your daily protein goal\n"
         "  /today — today's intake, burned & remaining\n"
@@ -201,6 +227,15 @@ async def protein_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     user_id = update.effective_user.id
     await _sheets(sheets_client.set_protein_goal, _sheets_service, user_id, goal)
     await update.message.reply_text(f"Daily protein goal set to {goal}g.")
+
+
+async def quick_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not _is_allowed(update):
+        return
+    await update.message.reply_text(
+        "Quick add — tap to log instantly:",
+        reply_markup=_quick_keyboard(),
+    )
 
 
 async def _build_today_summary(user_id: int) -> str:
@@ -538,9 +573,37 @@ async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
 async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
-    await query.answer()  # must answer quickly to remove loading spinner
-
     user_id = query.from_user.id
+
+    # Quick-add buttons: log straight to the sheet, no Claude call, no confirmation.
+    # The keyboard is left in place so several items can be tapped in a row.
+    if query.data.startswith("quick_"):
+        key = query.data[len("quick_"):]
+        item = next((i for i in QUICK_ITEMS if i[0] == key), None)
+        if item is None:
+            await query.answer("Unknown item.")
+            return
+        _, _, name, cal, protein = item
+        now = dt.now(tz=TZ)
+        row = [
+            now.strftime("%Y-%m-%d"),
+            now.strftime("%H:%M"),
+            "Food",
+            name,
+            cal,
+            "Quick add",
+            protein,
+        ]
+        try:
+            row_idx = await _sheets(sheets_client.append_row, _sheets_service, row)
+        except Exception as e:
+            await query.answer(f"Error writing to sheet: {e}"[:190], show_alert=True)
+            return
+        user_store.set_last_row(user_id, row_idx)
+        await query.answer(f"✅ {name} — {cal} kcal, {protein}g protein")
+        return
+
+    await query.answer()  # must answer quickly to remove loading spinner
 
     if query.data == "confirm_yes":
         entry = user_store.pending.pop(user_id, None)
@@ -624,6 +687,7 @@ def main() -> None:
     app.add_handler(CommandHandler("start", start_handler))
     app.add_handler(CommandHandler("goal", goal_handler))
     app.add_handler(CommandHandler("protein", protein_handler))
+    app.add_handler(CommandHandler("quick", quick_handler))
     app.add_handler(CommandHandler("today", today_handler))
     app.add_handler(CommandHandler("history", history_handler))
     app.add_handler(CommandHandler("undo", undo_handler))
