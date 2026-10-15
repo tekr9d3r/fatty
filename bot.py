@@ -10,7 +10,13 @@ from zoneinfo import ZoneInfo
 TZ = ZoneInfo("Europe/Ljubljana")
 
 from dotenv import load_dotenv
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram import (
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    KeyboardButton,
+    ReplyKeyboardMarkup,
+    Update,
+)
 from telegram.ext import (
     Application,
     CallbackQueryHandler,
@@ -139,6 +145,36 @@ def _quick_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(rows)
 
 
+def _quick_reply_keyboard() -> ReplyKeyboardMarkup:
+    """Persistent keyboard pinned to the bottom of the chat, always tappable."""
+    rows = []
+    for i in range(0, len(QUICK_ITEMS), 2):
+        rows.append([KeyboardButton(item[1]) for item in QUICK_ITEMS[i:i + 2]])
+    return ReplyKeyboardMarkup(rows, resize_keyboard=True, is_persistent=True)
+
+
+# Button label -> item, for matching taps that arrive as plain text messages
+_QUICK_BY_LABEL = {item[1]: item for item in QUICK_ITEMS}
+
+
+async def _log_quick_item(item, user_id: int) -> str:
+    """Write a quick item straight to the sheet. Returns a short confirmation."""
+    _, _, name, cal, protein = item
+    now = dt.now(tz=TZ)
+    row = [
+        now.strftime("%Y-%m-%d"),
+        now.strftime("%H:%M"),
+        "Food",
+        name,
+        cal,
+        "Quick add",
+        protein,
+    ]
+    row_idx = await _sheets(sheets_client.append_row, _sheets_service, row)
+    user_store.set_last_row(user_id, row_idx)
+    return f"✅ {name} — {cal} kcal, {protein}g protein"
+
+
 async def morning_reminder_job(context: ContextTypes.DEFAULT_TYPE) -> None:
     await context.bot.send_message(
         chat_id=context.job.chat_id,
@@ -199,7 +235,8 @@ async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         "  /protein 240 — set your daily protein goal\n"
         "  /today — today's intake, burned & remaining\n"
         "  /history 7 — last N days summary\n"
-        "  /undo — remove your last logged entry"
+        "  /undo — remove your last logged entry",
+        reply_markup=_quick_reply_keyboard(),
     )
 
 
@@ -233,8 +270,9 @@ async def quick_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     if not _is_allowed(update):
         return
     await update.message.reply_text(
-        "Quick add — tap to log instantly:",
-        reply_markup=_quick_keyboard(),
+        "Quick add — these buttons now sit at the bottom of the chat. "
+        "Tap any one to log it instantly.",
+        reply_markup=_quick_reply_keyboard(),
     )
 
 
@@ -433,6 +471,20 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     text = update.message.text
     user_id = update.effective_user.id
 
+    # A tap on the persistent quick keyboard arrives as plain text — log it
+    # directly, no Claude call and no confirmation step.
+    quick = _QUICK_BY_LABEL.get(text.strip())
+    if quick is not None:
+        user_store.pending.pop(user_id, None)
+        try:
+            confirmation = await _log_quick_item(quick, user_id)
+        except Exception as e:
+            _log_exception("quick log", e)
+            await update.message.reply_text(f"Error writing to sheet: {e}")
+            return
+        await update.message.reply_text(confirmation)
+        return
+
     # If the user is correcting a previous estimate, handle that first
     existing = user_store.pending.get(user_id)
     if existing and existing.get("awaiting_correction"):
@@ -583,24 +635,12 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         if item is None:
             await query.answer("Unknown item.")
             return
-        _, _, name, cal, protein = item
-        now = dt.now(tz=TZ)
-        row = [
-            now.strftime("%Y-%m-%d"),
-            now.strftime("%H:%M"),
-            "Food",
-            name,
-            cal,
-            "Quick add",
-            protein,
-        ]
         try:
-            row_idx = await _sheets(sheets_client.append_row, _sheets_service, row)
+            confirmation = await _log_quick_item(item, user_id)
         except Exception as e:
             await query.answer(f"Error writing to sheet: {e}"[:190], show_alert=True)
             return
-        user_store.set_last_row(user_id, row_idx)
-        await query.answer(f"✅ {name} — {cal} kcal, {protein}g protein")
+        await query.answer(confirmation)
         return
 
     await query.answer()  # must answer quickly to remove loading spinner
