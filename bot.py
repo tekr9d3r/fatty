@@ -105,12 +105,14 @@ def _progress_bar(current: int, total: int, width: int = 18, unit: str = "kcal")
     pct = int(current / total * 100)
     filled = min(round((current / total) * width), width)
     bar = "█" * filled + "░" * (width - filled)
+    # grams read better tight ("221g"), kcal with a space ("1920 kcal")
+    def fmt(v: int) -> str:
+        return f"{v}g" if unit == "g" else f"{v} {unit}"
+
     if current > total:
-        over = current - total
-        return f"[{bar}] {pct}% ⚠️  +{over} {unit} over!"
+        return f"[{bar}] {pct}% ⚠️  +{fmt(current - total)} over!"
     else:
-        remaining = total - current
-        return f"[{bar}] {pct}%  —  {remaining} {unit} left"
+        return f"[{bar}] {pct}%  —  {fmt(total - current)} left"
 
 
 def _confirmation_keyboard() -> InlineKeyboardMarkup:
@@ -145,11 +147,17 @@ def _quick_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(rows)
 
 
+# Status buttons on the same keyboard. 30 days for monthly, matching /history 30.
+STATUS_TODAY = "📊 Today"
+STATUS_MONTH = "📅 Monthly"
+
+
 def _quick_reply_keyboard() -> ReplyKeyboardMarkup:
     """Persistent keyboard pinned to the bottom of the chat, always tappable."""
     rows = []
     for i in range(0, len(QUICK_ITEMS), 2):
         rows.append([KeyboardButton(item[1]) for item in QUICK_ITEMS[i:i + 2]])
+    rows.append([KeyboardButton(STATUS_TODAY), KeyboardButton(STATUS_MONTH)])
     return ReplyKeyboardMarkup(rows, resize_keyboard=True, is_persistent=True)
 
 
@@ -351,27 +359,15 @@ async def today_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     await update.message.reply_text(text)
 
 
-async def history_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if not _is_allowed(update):
-        return
-    args = context.args
-    n_days = 7
-    if args and args[0].isdigit():
-        n_days = max(1, min(int(args[0]), 90))
-
-    try:
-        rows = await _sheets(sheets_client.read_recent_days, _sheets_service, n_days + 1)
-    except Exception as e:
-        await update.message.reply_text(f"Error reading sheet: {e}")
-        return
+async def _build_history_summary(user_id: int, n_days: int) -> str:
+    rows = await _sheets(sheets_client.read_recent_days, _sheets_service, n_days + 1)
 
     # Exclude today — only show completed days
     today = dt.now(tz=TZ).strftime("%Y-%m-%d")
     rows = [r for r in rows if len(r) >= 1 and r[0] != today]
 
     if not rows:
-        await update.message.reply_text(f"No completed days in the last {n_days} day(s).")
-        return
+        return f"No completed days in the last {n_days} day(s)."
 
     # Group by date
     by_date: dict[str, dict] = defaultdict(lambda: {"food": 0, "burned": 0, "protein": 0})
@@ -394,7 +390,6 @@ async def history_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             by_date[date]["food"] += cal
             by_date[date]["protein"] += protein
 
-    user_id = update.effective_user.id
     goal = await _sheets(sheets_client.get_user_goal, _sheets_service, user_id)
     protein_goal = await _sheets(sheets_client.get_protein_goal, _sheets_service, user_id)
 
@@ -445,7 +440,22 @@ async def history_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     else:
         lines.append(f"(daily breakdown available with /history 14 or less)")
 
-    await update.message.reply_text("\n".join(lines))
+    return "\n".join(lines)
+
+
+async def history_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not _is_allowed(update):
+        return
+    args = context.args
+    n_days = 7
+    if args and args[0].isdigit():
+        n_days = max(1, min(int(args[0]), 90))
+    try:
+        text = await _build_history_summary(update.effective_user.id, n_days)
+    except Exception as e:
+        await update.message.reply_text(f"Error reading sheet: {e}")
+        return
+    await update.message.reply_text(text)
 
 
 async def undo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -471,9 +481,25 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     text = update.message.text
     user_id = update.effective_user.id
 
+    # Status buttons on the quick keyboard also arrive as plain text
+    label = text.strip()
+    if label in (STATUS_TODAY, STATUS_MONTH):
+        user_store.pending.pop(user_id, None)
+        try:
+            if label == STATUS_TODAY:
+                summary = await _build_today_summary(user_id)
+            else:
+                summary = await _build_history_summary(user_id, 30)
+        except Exception as e:
+            _log_exception("status button", e)
+            await update.message.reply_text(f"Error reading sheet: {e}")
+            return
+        await update.message.reply_text(summary)
+        return
+
     # A tap on the persistent quick keyboard arrives as plain text — log it
     # directly, no Claude call and no confirmation step.
-    quick = _QUICK_BY_LABEL.get(text.strip())
+    quick = _QUICK_BY_LABEL.get(label)
     if quick is not None:
         user_store.pending.pop(user_id, None)
         try:
