@@ -150,6 +150,10 @@ def _quick_keyboard() -> InlineKeyboardMarkup:
 # Status buttons on the same keyboard. 30 days for monthly, matching /history 30.
 STATUS_TODAY = "📊 Today"
 STATUS_MONTH = "📅 Monthly"
+WORKOUT_BUTTON = "🏃 Workout"
+
+# Users who tapped the workout button and owe us a kcal number next
+_awaiting_workout_kcal: set[int] = set()
 
 
 def _quick_reply_keyboard() -> ReplyKeyboardMarkup:
@@ -157,7 +161,11 @@ def _quick_reply_keyboard() -> ReplyKeyboardMarkup:
     rows = []
     for i in range(0, len(QUICK_ITEMS), 2):
         rows.append([KeyboardButton(item[1]) for item in QUICK_ITEMS[i:i + 2]])
-    rows.append([KeyboardButton(STATUS_TODAY), KeyboardButton(STATUS_MONTH)])
+    rows.append([
+        KeyboardButton(STATUS_TODAY),
+        KeyboardButton(STATUS_MONTH),
+        KeyboardButton(WORKOUT_BUTTON),
+    ])
     return ReplyKeyboardMarkup(rows, resize_keyboard=True, is_persistent=True)
 
 
@@ -481,8 +489,51 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     text = update.message.text
     user_id = update.effective_user.id
 
-    # Status buttons on the quick keyboard also arrive as plain text
     label = text.strip()
+
+    # Workout button: ask for the kcal number, logged on the next message
+    if label == WORKOUT_BUTTON:
+        user_store.pending.pop(user_id, None)
+        _awaiting_workout_kcal.add(user_id)
+        await update.message.reply_text(
+            "🏃 How many kcal did you burn? Send just the number, e.g. 350"
+        )
+        return
+
+    # Any other keyboard tap cancels a pending workout prompt
+    if label in _QUICK_BY_LABEL or label in (STATUS_TODAY, STATUS_MONTH):
+        _awaiting_workout_kcal.discard(user_id)
+
+    if user_id in _awaiting_workout_kcal:
+        digits = label.lower().replace("kcal", "").replace("kcl", "").strip()
+        if not digits.isdigit() or not (0 < int(digits) <= 5000):
+            await update.message.reply_text(
+                "Send just a number between 1 and 5000, e.g. 350 — or tap any button to cancel."
+            )
+            return
+        _awaiting_workout_kcal.discard(user_id)
+        kcal = int(digits)
+        now = dt.now(tz=TZ)
+        row = [
+            now.strftime("%Y-%m-%d"),
+            now.strftime("%H:%M"),
+            "Workout",
+            "Workout",
+            -kcal,
+            "Manual entry",
+            0,
+        ]
+        try:
+            row_idx = await _sheets(sheets_client.append_row, _sheets_service, row)
+        except Exception as e:
+            _log_exception("workout log", e)
+            await update.message.reply_text(f"Error writing to sheet: {e}")
+            return
+        user_store.set_last_row(user_id, row_idx)
+        await update.message.reply_text(f"✅ Workout logged — {kcal} kcal burned.")
+        return
+
+    # Status buttons on the quick keyboard also arrive as plain text
     if label in (STATUS_TODAY, STATUS_MONTH):
         user_store.pending.pop(user_id, None)
         try:
